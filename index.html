@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SimpliLidarViewer</title>
+    <link rel="stylesheet" href="css/style.css">
+
+    <!-- Three.js ES module imports -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <!-- proj4 for coordinate system support -->
+    <script src="https://cdn.jsdelivr.net/npm/proj4@2.9.2/dist/proj4.js"></script>
+</head>
+<body>
+    <div id="app">
+
+        <!-- Header -->
+        <header id="header">
+            <div class="header-brand">
+                <svg class="brand-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="16" cy="16" r="14" stroke="#00d4ff" stroke-width="2"/>
+                    <circle cx="10" cy="14" r="2" fill="#00d4ff"/>
+                    <circle cx="16" cy="10" r="2" fill="#00aaff"/>
+                    <circle cx="22" cy="13" r="2" fill="#0088ff"/>
+                    <circle cx="12" cy="20" r="2" fill="#00ffcc"/>
+                    <circle cx="19" cy="19" r="2" fill="#00d4ff"/>
+                    <circle cx="8"  cy="21" r="1.5" fill="#00aaff" opacity="0.7"/>
+                    <circle cx="25" cy="18" r="1.5" fill="#0066ff" opacity="0.7"/>
+                    <circle cx="15" cy="24" r="1.5" fill="#00ffaa" opacity="0.7"/>
+                </svg>
+                <span class="brand-name">SimpliLidar<span class="brand-accent">Viewer</span></span>
+            </div>
+            <div class="header-actions">
+                <button id="btn-open-file" class="btn btn-primary">
+                    <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M3 5a2 2 0 012-2h4l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V5z" stroke="currentColor" stroke-width="1.5"/>
+                        <path d="M10 9v6M7 12l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                    Open File
+                </button>
+            </div>
+        </header>
+
+        <!-- Main layout -->
+        <div id="main">
+
+            <!-- Sidebar -->
+            <aside id="sidebar">
+
+                <!-- File info panel -->
+                <section class="panel" id="panel-file">
+                    <div class="panel-header">
+                        <svg viewBox="0 0 16 16" fill="none"><path d="M4 2h5l3 3v9H4V2z" stroke="currentColor" stroke-width="1.2"/><path d="M9 2v3h3" stroke="currentColor" stroke-width="1.2"/></svg>
+                        File Info
+                    </div>
+                    <div id="file-info">
+                        <div class="empty-hint">No file loaded.<br>Open or drop a .las / .laz file.</div>
+                    </div>
+                </section>
+
+                <!-- Color mode panel -->
+                <section class="panel" id="panel-color">
+                    <div class="panel-header">
+                        <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.2" opacity="0.4"/></svg>
+                        Color Mode
+                    </div>
+
+                    <div class="control-row">
+                        <label class="control-label">Style</label>
+                        <select id="color-mode" class="select">
+                            <option value="elevation">Elevation</option>
+                            <option value="classification">Classification</option>
+                            <option value="intensity">Intensity</option>
+                            <option value="rgb">RGB (if available)</option>
+                            <option value="single">Single Color</option>
+                        </select>
+                    </div>
+
+                    <div class="control-row" id="row-single-color" style="display:none">
+                        <label class="control-label">Color</label>
+                        <input type="color" id="single-color" value="#00d4ff" class="color-picker">
+                    </div>
+
+                    <div class="control-row">
+                        <label class="control-label">Point Size <span id="lbl-point-size" class="value-badge">1.0</span></label>
+                        <input type="range" id="point-size" class="slider" min="0.5" max="8" step="0.5" value="1">
+                    </div>
+                </section>
+
+                <!-- Auto rotate panel -->
+                <section class="panel" id="panel-rotate">
+                    <div class="panel-header">
+                        <svg viewBox="0 0 16 16" fill="none"><path d="M13 8A5 5 0 103 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M13 5v3h-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Auto Rotate
+                    </div>
+
+                    <div class="control-row">
+                        <label class="control-label">Enable</label>
+                        <label class="toggle-wrap">
+                            <input type="checkbox" id="auto-rotate" class="toggle-input">
+                            <span class="toggle-track">
+                                <span class="toggle-thumb"></span>
+                            </span>
+                        </label>
+                    </div>
+
+                    <div class="control-row">
+                        <label class="control-label">Speed <span id="lbl-rotate-speed" class="value-badge">2.0</span></label>
+                        <input type="range" id="rotate-speed" class="slider" min="0.1" max="10" step="0.1" value="2">
+                    </div>
+
+                    <div class="control-row">
+                        <label class="control-label">Direction</label>
+                        <select id="rotate-direction" class="select">
+                            <option value="1">Clockwise</option>
+                            <option value="-1">Counter-Clockwise</option>
+                        </select>
+                    </div>
+                </section>
+
+                <!-- Coordinate system panel -->
+                <section class="panel" id="panel-crs">
+                    <div class="panel-header">
+                        <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M2 8h12M8 2c-2 2-2 8 0 12M8 2c2 2 2 8 0 12" stroke="currentColor" stroke-width="1.2"/></svg>
+                        Coordinate System
+                    </div>
+
+                    <div id="crs-detected" class="info-box" style="display:none"></div>
+
+                    <div class="control-row">
+                        <label class="control-label">EPSG Code</label>
+                        <div class="input-btn-group">
+                            <input type="text" id="epsg-input" class="text-input" placeholder="e.g. 32610" maxlength="8">
+                            <button id="btn-apply-epsg" class="btn btn-sm">Apply</button>
+                        </div>
+                    </div>
+
+                    <div id="crs-name" class="crs-name-display"></div>
+                </section>
+
+                <!-- View controls panel -->
+                <section class="panel" id="panel-view">
+                    <div class="panel-header">
+                        <svg viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M5 8h6M8 5v6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                        View Controls
+                    </div>
+
+                    <div class="control-row">
+                        <label class="control-label">Grid</label>
+                        <label class="toggle-wrap">
+                            <input type="checkbox" id="show-grid" class="toggle-input">
+                            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                        </label>
+                    </div>
+
+                    <div class="control-row">
+                        <label class="control-label">Axes</label>
+                        <label class="toggle-wrap">
+                            <input type="checkbox" id="show-axes" class="toggle-input" checked>
+                            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                        </label>
+                    </div>
+
+                    <div class="btn-group-vertical">
+                        <button id="btn-reset-camera" class="btn btn-secondary">Reset Camera</button>
+                        <button id="btn-top-view" class="btn btn-secondary">Top View</button>
+                        <button id="btn-side-view" class="btn btn-secondary">Side View</button>
+                    </div>
+                </section>
+
+            </aside>
+
+            <!-- 3D Viewport -->
+            <div id="viewport">
+
+                <!-- Drop zone (shown when no file loaded) -->
+                <div id="drop-zone">
+                    <div class="drop-content">
+                        <svg class="drop-icon" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <circle cx="20" cy="28" r="3" fill="#00d4ff" opacity="0.8"/>
+                            <circle cx="32" cy="20" r="3" fill="#00aaff" opacity="0.8"/>
+                            <circle cx="44" cy="26" r="3" fill="#0088ff" opacity="0.8"/>
+                            <circle cx="16" cy="40" r="3" fill="#00ffcc" opacity="0.8"/>
+                            <circle cx="30" cy="44" r="3" fill="#00d4ff" opacity="0.8"/>
+                            <circle cx="46" cy="38" r="3" fill="#00aaff" opacity="0.8"/>
+                            <circle cx="10" cy="32" r="2" fill="#00d4ff" opacity="0.5"/>
+                            <circle cx="52" cy="30" r="2" fill="#0066ff" opacity="0.5"/>
+                            <circle cx="38" cy="48" r="2" fill="#00ffaa" opacity="0.5"/>
+                            <circle cx="24" cy="50" r="2" fill="#00d4ff" opacity="0.5"/>
+                            <path d="M32 54V36M25 43l7-7 7 7" stroke="#00d4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <h2>Drop your LiDAR file here</h2>
+                        <p>Supports <strong>.las</strong> and <strong>.laz</strong> files</p>
+                        <span class="drop-or">— or —</span>
+                        <button class="btn btn-primary" onclick="document.getElementById('file-input').click()">Browse File</button>
+                    </div>
+                </div>
+
+                <!-- HUD overlay -->
+                <div id="hud" style="display:none">
+                    <div id="hud-coords">
+                        <span class="hud-label">X</span> <span id="hud-x">—</span>
+                        <span class="hud-label">Y</span> <span id="hud-y">—</span>
+                        <span class="hud-label">Z</span> <span id="hud-z">—</span>
+                    </div>
+                </div>
+
+                <!-- Loading overlay -->
+                <div id="loading-overlay" style="display:none">
+                    <div class="loading-content">
+                        <div class="spinner"></div>
+                        <div id="loading-msg">Loading file...</div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Status bar -->
+        <footer id="statusbar">
+            <span id="status-points">No file loaded</span>
+            <span class="status-sep">|</span>
+            <span id="status-fps">FPS —</span>
+            <span class="status-sep">|</span>
+            <span id="status-crs">CRS: Unknown</span>
+            <span class="status-sep">|</span>
+            <span id="status-subsampled" style="display:none" class="status-warn">Subsampled</span>
+        </footer>
+
+    </div>
+
+    <!-- Hidden file input -->
+    <input type="file" id="file-input" accept=".las,.laz" style="display:none">
+
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>
