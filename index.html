@@ -6,15 +6,9 @@
     <title>SimpliLidarViewer</title>
     <link rel="stylesheet" href="css/style.css">
 
-    <!-- Three.js ES module imports -->
-    <script type="importmap">
-    {
-        "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-        }
-    }
-    </script>
+    <!-- Three.js r128 UMD — works from file:// without a server -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 
     <!-- proj4 for coordinate system support -->
     <script src="https://cdn.jsdelivr.net/npm/proj4@2.9.2/dist/proj4.js"></script>
@@ -201,6 +195,9 @@
                         <p>Supports <strong>.las</strong> and <strong>.laz</strong> files</p>
                         <span class="drop-or">— or —</span>
                         <button class="btn btn-primary" onclick="document.getElementById('file-input').click()">Browse File</button>
+                        <div class="laz-note" id="laz-server-note" style="display:none">
+                            <strong>LAZ note:</strong> For .laz files use <code>launch.bat</code>
+                        </div>
                     </div>
                 </div>
 
@@ -240,6 +237,11 @@
     <!-- Hidden file input -->
     <input type="file" id="file-input" accept=".las,.laz" style="display:none">
 
-    <script type="module" src="js/main.js"></script>
+    <!-- App scripts — plain <script> tags work from file:// and HTTP alike -->
+    <script src="js/colorizer.js"></script>
+    <script src="js/laz-decoder.js"></script>
+    <script src="js/las-parser.js"></script>
+    <script src="js/viewer.js"></script>
+    <script src="js/main.js"></script>
 </body>
 </html>
