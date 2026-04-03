@@ -249,31 +249,29 @@ function applyCRS(epsgCode) {
     crsNameEl.textContent = 'Looking up…';
     statusCRS.textContent = 'CRS: EPSG:' + epsgCode;
 
-    fetch('https://epsg.io/' + epsgCode + '.proj4')
+    fetch('https://epsg.io/?q=' + epsgCode + '&format=json')
         .then(function (r) {
-            if (!r.ok) throw new Error('EPSG:' + epsgCode + ' not found');
-            return r.text();
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
         })
-        .then(function (proj4def) {
-            if (typeof proj4 !== 'undefined') {
-                proj4.defs('EPSG:' + epsgCode, proj4def.trim());
-            }
-            return fetch('https://epsg.io/?q=' + epsgCode + '&format=json');
-        })
-        .then(function (r) { return r.json(); })
         .then(function (info) {
             var result = info.results && info.results[0];
             if (result) {
+                if (result.proj4 && typeof proj4 !== 'undefined') {
+                    proj4.defs('EPSG:' + epsgCode, result.proj4.trim());
+                }
                 state.crsName = result.name;
                 crsNameEl.textContent = result.name;
                 statusCRS.textContent = 'CRS: ' + result.name + ' (EPSG:' + epsgCode + ')';
             } else {
-                crsNameEl.textContent = 'EPSG:' + epsgCode + ' loaded';
+                crsNameEl.textContent = 'EPSG:' + epsgCode;
+                statusCRS.textContent = 'CRS: EPSG:' + epsgCode;
             }
             state.epsg = epsgCode;
         })
-        .catch(function (err) {
-            crsNameEl.textContent = 'Could not resolve EPSG:' + epsgCode;
+        .catch(function () {
+            crsNameEl.textContent = 'EPSG:' + epsgCode;
+            statusCRS.textContent = 'CRS: EPSG:' + epsgCode;
         });
 }
 

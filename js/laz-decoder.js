@@ -940,7 +940,7 @@ ByteReader.prototype.read = function (out) {
 function Point14Context() {
     this.unused = true;
     this.last_item = null; // Uint8Array(30+)
-    this.m_changed_values = new Array(8); // 8 models (lpr 0-7)
+    this.m_changed_values = [null, null, null, null, null, null, null, null]; // 8 models (lpr 0-7)
     this.m_scanner_channel = null;
     this.m_number_of_returns = new Array(16);
     this.m_return_number = new Array(16);
@@ -1014,9 +1014,18 @@ function Point14Reader() {
     this.point14Size = 30; // base size for format 6
 }
 
-Point14Reader.prototype.initChunk = function (bytes, chunkOffset, view) {
-    // Read 9 layer sizes (int32 each)
-    var pos = chunkOffset;
+/**
+ * initChunk — read 9 layer byte sizes from sizesOffset, then create
+ * ArithmeticDecoders starting at dataOffset.
+ *
+ * @param {Uint8Array} bytes     Entire file bytes
+ * @param {number}     sizesOff  Offset to the first of 9 U32 layer sizes
+ * @param {number}     dataOff   Offset to the start of compressed layer data
+ * @param {DataView}   view      DataView over the same buffer
+ * @returns {number}   The total bytes of compressed Point14 data (sum of 9 layers)
+ */
+Point14Reader.prototype.initChunk = function (bytes, sizesOff, dataOff, view) {
+    var pos = sizesOff;
     var num_bytes_returns_XY  = view.getUint32(pos, true); pos += 4;
     var num_bytes_Z           = view.getUint32(pos, true); pos += 4;
     var num_bytes_class       = view.getUint32(pos, true); pos += 4;
@@ -1027,16 +1036,11 @@ Point14Reader.prototype.initChunk = function (bytes, chunkOffset, view) {
     var num_bytes_point_source= view.getUint32(pos, true); pos += 4;
     var num_bytes_gps_time    = view.getUint32(pos, true); pos += 4;
 
-    // Raw first point starts here
-    var firstPointOffset = pos;
+    var off = dataOff;
 
-    // Compressed layer data starts after the raw first point
-    var layerStart = firstPointOffset + this.point14Size;
-
-    // Init each decoder on its layer
     this.dec_channel_returns_XY = new ArithmeticDecoder();
-    this.dec_channel_returns_XY.init(bytes, layerStart);
-    var off = layerStart + num_bytes_returns_XY;
+    this.dec_channel_returns_XY.init(bytes, off);
+    off += num_bytes_returns_XY;
 
     this.changed_Z = (num_bytes_Z > 0);
     if (this.changed_Z) {
@@ -1092,14 +1096,18 @@ Point14Reader.prototype.initChunk = function (bytes, chunkOffset, view) {
         this.dec_gps_time = new ArithmeticDecoder();
         this.dec_gps_time.init(bytes, off);
     }
+    off += num_bytes_gps_time;
 
     // Reset all contexts
     for (var c = 0; c < 4; c++) {
         this.contexts[c].unused = true;
     }
 
-    // Return offset of the raw first point
-    return firstPointOffset;
+    // Return total pt14 compressed bytes and the end offset
+    var totalPt14 = num_bytes_returns_XY + num_bytes_Z + num_bytes_class +
+        num_bytes_flags + num_bytes_intensity + num_bytes_scan_angle +
+        num_bytes_user_data + num_bytes_point_source + num_bytes_gps_time;
+    return totalPt14;
 };
 
 Point14Reader.prototype._createAndInitContext = function (ctx, item) {
@@ -1617,6 +1625,26 @@ RGB14Reader.prototype.read = function (out, context) {
 // Helper: read string from bytes
 // ═══════════════════════════════════════════════════════════════════════════════
 
+function _extractEPSGFromWKT(wkt) {
+    // Prefer the PROJCS block's own AUTHORITY["EPSG","NNNN"]
+    var start = wkt.indexOf('PROJCS[');
+    if (start >= 0) {
+        var depth = 0, end = start;
+        for (var i = start; i < wkt.length; i++) {
+            if (wkt[i] === '[') depth++;
+            else if (wkt[i] === ']') { depth--; if (depth === 0) { end = i; break; } }
+        }
+        var block = wkt.substring(start, end + 1);
+        var re = /AUTHORITY\["EPSG","(\d+)"\]/gi;
+        var mm, last = null;
+        while ((mm = re.exec(block)) !== null) last = mm[1];
+        if (last) return parseInt(last);
+    }
+    // Fallback: first AUTHORITY in any context
+    var m = wkt.match(/AUTHORITY\["EPSG","(\d+)"\]/i);
+    return m ? parseInt(m[1]) : null;
+}
+
 function readString(bytes, offset, maxLen) {
     var s = '';
     for (var i = 0; i < maxLen; i++) {
@@ -1651,7 +1679,7 @@ LAZDecoder.decode = function (buffer) {
     var headerSize        = view.getUint16(94, true);
     var offsetToPoints    = view.getUint32(96, true);
     var numVLRs           = view.getUint32(100, true);
-    var pointFormatId     = bytes[104];
+    var pointFormatId     = bytes[104] & 0x3F; // LAS 1.4: bits 6-7 are flags, 0-5 are format
     var pointRecordLength = view.getUint16(105, true);
 
     var numPoints;
@@ -1713,8 +1741,7 @@ LAZDecoder.decode = function (buffer) {
     if (!lazVlr) throw new Error('No LAZ VLR found — this does not appear to be a valid LAZ file.');
 
     if (!crsEPSG && crsWKT) {
-        var m = crsWKT.match(/AUTHORITY\["EPSG","(\d+)"\]/i);
-        if (m) crsEPSG = parseInt(m[1]);
+        crsEPSG = _extractEPSGFromWKT(crsWKT);
     }
 
     // ── Parse LAZ VLR ────────────────────────────────────────────────
@@ -1724,11 +1751,11 @@ LAZDecoder.decode = function (buffer) {
     var lazVerMajor  = bytes[lzOff + 4];
     var lazVerMinor  = bytes[lzOff + 5];
     var chunkSize    = view.getUint32(lzOff + 12, true);
-    var numItems     = view.getUint16(lzOff + 34, true);
+    var numItems     = view.getUint16(lzOff + 32, true);
 
     var items = [];
     for (var i = 0; i < numItems; i++) {
-        var base = lzOff + 36 + i * 6;
+        var base = lzOff + 34 + i * 6;
         items.push({
             type:    view.getUint16(base + 0, true),
             size:    view.getUint16(base + 2, true),
@@ -1747,40 +1774,40 @@ LAZDecoder.decode = function (buffer) {
 
     // ── Read chunk table ─────────────────────────────────────────────
     var chunkStarts = [];
-    var firstChunkStart;
     var numChunks;
 
-    if (compressor === LASZIP_COMPRESSOR_POINTWISE_CHUNKED || compressor === LASZIP_COMPRESSOR_LAYERED_CHUNKED) {
-        // The chunk table is stored at offsetToPoints
-        // Version field (4 bytes) + number of chunks (4 bytes)
+    if (chunkSize === 0xFFFFFFFF || chunkSize === 0) chunkSize = numPoints;
+
+    if (compressor === LASZIP_COMPRESSOR_LAYERED_CHUNKED) {
+        // For layered chunked (v3), the first 8 bytes at offsetToPoints are
+        // an I64 pointing to the chunk table (at end of file). Point data
+        // starts at offsetToPoints + 8.
+        numChunks = Math.ceil(numPoints / chunkSize);
+        // We don't need the chunk table — we'll walk chunks sequentially
+        // since each chunk's size is self-describing from its layer sizes.
+        chunkStarts.push(offsetToPoints + 8);
+        // Additional chunk starts will be computed while decoding.
+    } else if (compressor === LASZIP_COMPRESSOR_POINTWISE_CHUNKED) {
         var ctVersion = view.getUint32(offsetToPoints, true);
         numChunks = view.getUint32(offsetToPoints + 4, true);
-
-        if (chunkSize === 0xFFFFFFFF || chunkSize === 0) chunkSize = numPoints;
         if (numChunks === 0) numChunks = 1;
 
-        var chunkTableHeaderSize = 8; // version(4) + numChunks(4)
+        var chunkTableHeaderSize = 8;
 
         if (ctVersion === 0) {
-            // Uncompressed chunk table
             var tableStart = offsetToPoints + chunkTableHeaderSize;
             var accumulated = tableStart + numChunks * 8;
-            firstChunkStart = accumulated;
             for (var i = 0; i < numChunks; i++) {
                 chunkStarts.push(accumulated);
                 var chunkBytes = view.getUint32(tableStart + i * 8 + 4, true);
                 accumulated += chunkBytes;
             }
         } else {
-            // Compressed chunk table — treat as single chunk
-            firstChunkStart = offsetToPoints + chunkTableHeaderSize;
-            chunkStarts.push(firstChunkStart);
+            chunkStarts.push(offsetToPoints + chunkTableHeaderSize);
             numChunks = 1;
             chunkSize = numPoints;
         }
     } else {
-        // Pointwise (no chunks) — single chunk
-        firstChunkStart = offsetToPoints;
         chunkStarts.push(offsetToPoints);
         chunkSize = numPoints;
         numChunks = 1;
@@ -1830,135 +1857,68 @@ LAZDecoder.decode = function (buffer) {
 
     if (isLayered) {
         // ── v3 Layered Chunked decode path ───────────────────────────
-        for (var chunkIdx = 0; chunkIdx < chunkStarts.length; chunkIdx++) {
-            var chunkOffset = chunkStarts[chunkIdx];
+        // Per-chunk layout (confirmed from LASzip C++ and laz-rs):
+        //   [raw first point bytes for ALL items]
+        //   [U32 remaining point count]
+        //   [9 U32 Point14 layer sizes]
+        //   [1 U32 RGB14 layer size (if RGB item)]
+        //   [1 U32 NIR layer size (if NIR item)]
+        //   [Point14 compressed data (9 layers concatenated)]
+        //   [RGB14 compressed data]
+        //   [NIR compressed data]
+
+        var rawPtSize = point14Size || 30;
+        var rgbItemSize = hasNIRItem ? 8 : (hasRGBItem ? 6 : 0);
+        var totalRawSize = rawPtSize + rgbItemSize + extraBytesSize;
+
+        // Number of extra layer-size U32s (beyond the 9 Point14 ones)
+        var extraSizeCount = 0;
+        if (hasRGBItem) extraSizeCount++;
+        if (hasNIRItem) extraSizeCount++;
+        // extra bytes would add more size U32s here if needed
+
+        var nextChunkOff = chunkStarts[0]; // first chunk starts after the I64 chunk-table pointer
+
+        for (var chunkIdx = 0; chunkIdx < numChunks; chunkIdx++) {
+            var chunkOffset = nextChunkOff;
             var pointsInChunk = Math.min(chunkSize, numPoints - chunkIdx * chunkSize);
             if (pointsInChunk <= 0) break;
 
-            // Create Point14Reader and init chunk
-            // initChunk reads 9 layer sizes, then sets point14Size bytes as the raw
-            // first point, then creates per-layer ArithmeticDecoders.
-            var pt14reader = new Point14Reader();
-            var rgb14reader = hasRGBItem ? new RGB14Reader() : null;
+            var pos = chunkOffset;
 
-            // Set point14Size so initChunk knows the raw first-point size for the
-            // POINT14 item. RGB/NIR items are separate — handled below.
-            pt14reader.point14Size = point14Size || 30;
+            // 1. Read raw first point (all items)
+            for (var b = 0; b < totalRawSize && pos + b < bufLen; b++) {
+                pointBuf[b] = bytes[pos + b];
+            }
+            pos += totalRawSize;
 
-            // The chunk header has 9 U32 layer sizes for Point14, plus additional
-            // U32 sizes for RGB, NIR, waveform, and extra-bytes layers. We need to
-            // read the extra layer sizes *before* calling initChunk, because initChunk
-            // only handles the first 9.  However, initChunk also starts reading from
-            // chunkOffset, so we need to account for the extra size headers by
-            // adjusting the offset it sees, OR read them here and tell initChunk to
-            // skip them.
-            //
-            // The cleanest approach: read the extra layer sizes here, then compute
-            // the additional header bytes so we can tell initChunk to offset past them.
-            //
-            // Actually, looking at the LASzip source more carefully:
-            // The chunk header for layered is:
-            //   [U32 x num_items_per_record: layer byte sizes]
-            //   [raw first point bytes (sum of all item sizes)]
-            //   [layer 0 data][layer 1 data]...
-            //
-            // For Point14 alone there are 9 layers.
-            // For Point14 + RGB14 there are 9 + 1 = 10 layers.
-            // For Point14 + RGBNIR14 there are 9 + 2 = 11 layers.
-            //
-            // But the layer sizes for non-Point14 items come AFTER the 9 Point14 sizes.
-            // And the raw first point includes ALL item bytes.
-            //
-            // So the layout is:
-            //   [9 x U32: Point14 layer sizes]
-            //   [1 x U32: RGB layer size (if RGB item present)]
-            //   [1 x U32: NIR layer size (if NIR item present)]
-            //   [N x U32: extra bytes layer sizes]
-            //   [raw first point: point14Size + rgbItemSize + nirItemSize + extraBytesSize]
-            //   [Point14 layer 0 data]...[Point14 layer 8 data]
-            //   [RGB layer data]
-            //   [NIR layer data]
-            //   [extra bytes layer data]
+            // 2. Skip remaining-point-count U32
+            pos += 4;
 
-            // Read the extra layer sizes that come after the 9 Point14 sizes
-            var extraHeaderPos = chunkOffset + 36; // skip 9 * 4 = 36 bytes
+            // 3. Read layer sizes: 9 for Point14, then extras
+            var pt14SizesOff = pos;
+            pos += 9 * 4;
+
             var rgbLayerSize = 0;
-            var nirLayerSize = 0;
-            if (hasRGBItem && !hasNIRItem) {
-                rgbLayerSize = view.getUint32(extraHeaderPos, true);
-                extraHeaderPos += 4;
+            if (hasRGBItem) {
+                rgbLayerSize = view.getUint32(pos, true);
+                pos += 4;
             }
             if (hasNIRItem) {
-                rgbLayerSize = view.getUint32(extraHeaderPos, true);
-                extraHeaderPos += 4;
-                nirLayerSize = view.getUint32(extraHeaderPos, true);
-                extraHeaderPos += 4;
-            }
-            if (extraBytesSize > 0) {
-                extraHeaderPos += 4; // skip extra bytes layer size
+                pos += 4; // skip NIR layer size
             }
 
-            // extraHeaderPos now points to where the raw first point starts.
-            // But initChunk expects to read from chunkOffset and will read 9 U32s
-            // then treat the next byte as firstPointOffset. We need to adjust so
-            // initChunk knows about the extra header bytes.
-            //
-            // Override point14Size temporarily to include the header gap:
-            // initChunk reads: 9*U32 from chunkOffset, then firstPointOffset = pos,
-            // then layerStart = firstPointOffset + this.point14Size
-            // We need layerStart to skip past: raw first point for ALL items.
-            // The extra layer-size U32s are between the 9 Point14 layer sizes and
-            // the raw first point. initChunk doesn't know about them.
-            //
-            // Solution: call initChunk with an adjusted chunkOffset that skips the
-            // extra layer-size headers, but only if we have extra items. The raw first
-            // point that initChunk expects = point14Size only (it doesn't know about RGB).
-            // The RGB raw bytes are part of the raw first point area but come AFTER
-            // the Point14 bytes.
+            // 4. Compressed data starts here
+            var dataOff = pos;
 
-            // Compute total raw first-point area
-            var rgbItemSize = hasNIRItem ? 8 : (hasRGBItem ? 6 : 0);
-            var totalRawSize = (point14Size || 30) + rgbItemSize + extraBytesSize;
+            // Init Point14Reader with correct offsets
+            var pt14reader = new Point14Reader();
+            var totalPt14Bytes = pt14reader.initChunk(bytes, pt14SizesOff, dataOff, view);
 
-            // Tell initChunk to skip past the extra header bytes by adjusting offset
-            // so the 9 U32s it reads are still the Point14 layer sizes, but firstPointOffset
-            // lands after the extra layer-size U32s.
-            //
-            // Actually the simplest fix: just override where initChunk thinks the
-            // raw first point is by padding point14Size to include the extra headers.
-            var extraHeaderBytes = (extraHeaderPos - chunkOffset) - 36; // bytes of extra layer-size U32s
-            pt14reader.point14Size = totalRawSize + extraHeaderBytes;
+            // Compute next chunk offset
+            nextChunkOff = dataOff + totalPt14Bytes + rgbLayerSize;
 
-            // Now initChunk will: read 9*U32 (36 bytes), set firstPointOffset = chunkOffset+36,
-            // layerStart = firstPointOffset + point14Size
-            //            = chunkOffset + 36 + totalRawSize + extraHeaderBytes
-            //            = chunkOffset + 36 + extraHeaderBytes + totalRawSize
-            //            = extraHeaderPos + totalRawSize
-            // which is correct — compressed layers start after all raw first-point bytes.
-
-            // But initChunk also returns firstPointOffset which we use to read the raw point.
-            // firstPointOffset = chunkOffset + 36 — that's wrong because the actual raw point
-            // starts at extraHeaderPos (after the extra layer-size U32s).
-            // We'll handle this by reading the raw point ourselves at extraHeaderPos.
-
-            var firstPointOff = extraHeaderPos;
-
-            // Read raw first point into pointBuf
-            for (var b = 0; b < totalRawSize && firstPointOff + b < bufLen; b++) {
-                pointBuf[b] = bytes[firstPointOff + b];
-            }
-
-            // Compute total layer sizes sum to find where RGB layer data starts
-            var totalPt14LayerBytes = 0;
-            for (var ls = 0; ls < 9; ls++) {
-                totalPt14LayerBytes += view.getUint32(chunkOffset + ls * 4, true);
-            }
-
-            // Init Point14Reader — reads 9 layer sizes, creates decoders
-            pt14reader.initChunk(bytes, chunkOffset, view);
-
-            // Init the first scanner channel context from the raw first point
-            var rawPtSize = point14Size || 30;
+            // Init first scanner channel context
             var firstChannel = (pointBuf[15] >>> 4) & 0x03;
             pt14reader.current_context = firstChannel;
             pt14reader._createAndInitContext(
@@ -1967,11 +1927,10 @@ LAZDecoder.decode = function (buffer) {
             );
 
             // Init RGB14Reader if needed
+            var rgb14reader = hasRGBItem ? new RGB14Reader() : null;
             if (rgb14reader) {
-                // RGB layer data starts after all 9 Point14 layers
-                var rgbLayerDataOff = firstPointOff + totalRawSize + totalPt14LayerBytes;
-                rgb14reader.initChunk(bytes, rgbLayerDataOff, rgbLayerSize, view);
-                // Init first RGB context from raw first point
+                var rgbDataOff = dataOff + totalPt14Bytes;
+                rgb14reader.initChunk(bytes, rgbDataOff, rgbLayerSize, view);
                 var firstRGB = new Uint16Array(3);
                 if (colOff > 0 && colOff + 6 <= pointRecordLength) {
                     firstRGB[0] = pointView.getUint16(colOff, true);
@@ -1990,11 +1949,10 @@ LAZDecoder.decode = function (buffer) {
             }
             globalIdx++;
 
-            // Decompress remaining points in this chunk
+            // Decompress remaining points
             for (var p = 1; p < pointsInChunk; p++, globalIdx++) {
                 pt14reader.read(pointBuf.subarray(0, rawPtSize));
 
-                // Read RGB if present
                 if (rgb14reader) {
                     rgb14reader.read(rgbBuf, pt14reader.current_context);
                     if (colOff > 0) {

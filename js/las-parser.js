@@ -15,6 +15,24 @@ const LASParser = (function () {
 
     const MAX_POINTS = 5_000_000;
 
+    function _extractEPSGFromWKT(wkt) {
+        var start = wkt.indexOf('PROJCS[');
+        if (start >= 0) {
+            var depth = 0, end = start;
+            for (var i = start; i < wkt.length; i++) {
+                if (wkt[i] === '[') depth++;
+                else if (wkt[i] === ']') { depth--; if (depth === 0) { end = i; break; } }
+            }
+            var block = wkt.substring(start, end + 1);
+            var re = /AUTHORITY\["EPSG","(\d+)"\]/gi;
+            var mm, last = null;
+            while ((mm = re.exec(block)) !== null) last = mm[1];
+            if (last) return parseInt(last);
+        }
+        var m = wkt.match(/AUTHORITY\["EPSG","(\d+)"\]/i);
+        return m ? parseInt(m[1]) : null;
+    }
+
     function _readString(bytes, offset, maxLen) {
         let s = '';
         for (let i = 0; i < maxLen; i++) {
@@ -42,7 +60,7 @@ const LASParser = (function () {
         const headerSize        = view.getUint16(94,  true);
         const offsetToPoints    = view.getUint32(96,  true);
         const numVLRs           = view.getUint32(100, true);
-        const pointFormatId     = bytes[104];
+        const pointFormatId     = bytes[104] & 0x3F; // LAS 1.4: bits 6-7 are flags, 0-5 are format
         const pointRecordLength = view.getUint16(105, true);
 
         let numPoints = (vMajor === 1 && vMinor >= 4)
@@ -76,8 +94,7 @@ const LASParser = (function () {
             vlrPos += 54 + recLen;
         }
         if (!crsEPSG && crsWKT) {
-            const m = crsWKT.match(/AUTHORITY\["EPSG","(\d+)"\]/i);
-            if (m) crsEPSG = parseInt(m[1]);
+            crsEPSG = _extractEPSGFromWKT(crsWKT);
         }
 
         // ── Point format capabilities ────────────────────────────────
